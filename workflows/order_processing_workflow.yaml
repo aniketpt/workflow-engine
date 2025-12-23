@@ -1,0 +1,253 @@
+name: order-processing
+version: 1.0
+description: "E-commerce order processing workflow demonstrating durable execution, human approvals, parallel tasks, retries, and complex dependencies - showcasing why this engine is superior to Celery"
+
+parameters:
+  - name: order_id
+    type: string
+    required: true
+    description: "Unique order identifier"
+  - name: customer_id
+    type: string
+    required: true
+    description: "Customer identifier"
+  - name: order_amount
+    type: float
+    required: true
+    description: "Total order amount in currency units"
+  - name: items
+    type: array
+    required: true
+    description: "List of items with product_id and quantity"
+  - name: payment_method
+    type: object
+    required: true
+    description: "Payment method details (card, account, etc.)"
+  - name: customer_email
+    type: string
+    required: true
+    description: "Customer email address for notifications"
+  - name: customer_phone
+    type: string
+    required: false
+    description: "Customer phone number for SMS notifications"
+  - name: requires_approval_threshold
+    type: float
+    required: false
+    default: 1000.0
+    description: "Order amount threshold requiring manager approval"
+
+tasks:
+  # Stage 1: Validate order data
+  - id: validate_order
+    name: "Validate Order"
+    type: activity
+    activity_type: http_request
+    config:
+      url: "https://httpbin.org/post"
+      method: POST
+      headers:
+        Content-Type: "application/json"
+      body:
+        action: "validate_order"
+        note: "Order validation - checks data integrity, customer status, etc."
+    retry:
+      max_attempts: 3
+      initial_interval: "2s"
+      max_interval: "10s"
+      multiplier: 2.0
+    timeout: "30s"
+    description: "Validates order data integrity and customer eligibility. Retries on transient validation service failures."
+
+  # Stage 2: Parallel checks (inventory + payment validation)
+  - id: check_inventory
+    name: "Check Inventory Availability"
+    type: activity
+    activity_type: http_request
+    config:
+      url: "https://httpbin.org/post"
+      method: POST
+      headers:
+        Content-Type: "application/json"
+      body:
+        action: "check_inventory"
+        note: "Checks if all items are available in stock"
+    depends_on:
+      - validate_order
+    retry:
+      max_attempts: 3
+      initial_interval: "2s"
+      max_interval: "15s"
+      multiplier: 2.0
+    timeout: "45s"
+    description: "Checks inventory availability for all items. Runs in parallel with payment validation."
+
+  - id: validate_payment
+    name: "Validate Payment Method"
+    type: activity
+    activity_type: http_request
+    config:
+      url: "https://httpbin.org/post"
+      method: POST
+      headers:
+        Content-Type: "application/json"
+      body:
+        action: "validate_payment"
+        note: "Validates payment method and checks for fraud"
+    depends_on:
+      - validate_order
+    retry:
+      max_attempts: 3
+      initial_interval: "2s"
+      max_interval: "15s"
+      multiplier: 2.0
+    timeout: "45s"
+    description: "Validates payment method and performs fraud checks. Runs in parallel with inventory check."
+
+  # Stage 3: Conditional human approval for high-value orders
+  # Note: In a real implementation, this would be conditional based on order_amount
+  # For demo purposes, we show it as a required step that can be skipped for low-value orders
+  - id: manager_approval
+    name: "Manager Approval (High-Value Orders)"
+    type: activity
+    activity_type: human_approval
+    config:
+      approval_id: "order-approval"
+      title: "High-Value Order Approval Required"
+      description: "Order requires manager approval"
+      context: {}
+      poll_interval: 5.0
+      max_wait_time: 3600.0
+    depends_on:
+      - check_inventory
+      - validate_payment
+    retry:
+      max_attempts: 1
+      initial_interval: "1s"
+      max_interval: "5s"
+      multiplier: 1.0
+    timeout: "1h"
+    description: |
+      Human-in-the-loop approval for high-value orders. This demonstrates a key differentiator:
+      workflows can pause for hours or days waiting for human input, which is impossible with
+      Celery. The workflow state is persisted and will resume automatically when approved.
+
+  # Stage 4: Process payment with robust retry logic
+  - id: process_payment
+    name: "Process Payment"
+    type: activity
+    activity_type: http_request
+    config:
+      url: "https://httpbin.org/post"
+      method: POST
+      headers:
+        Content-Type: "application/json"
+      body:
+        action: "process_payment"
+        note: "Charges the customer's payment method"
+    depends_on:
+      - manager_approval
+    retry:
+      max_attempts: 5
+      initial_interval: "3s"
+      max_interval: "60s"
+      multiplier: 2.0
+    timeout: "2m"
+    description: |
+      Processes payment with aggressive retry policy. Payment gateways can be unreliable,
+      so we retry up to 5 times with exponential backoff. If the server crashes during
+      payment processing, Temporal ensures the workflow resumes automatically - impossible
+      with Celery without complex state management.
+
+  # Stage 5: Reserve inventory (depends on inventory check)
+  - id: reserve_inventory
+    name: "Reserve Inventory"
+    type: activity
+    activity_type: http_request
+    config:
+      url: "https://httpbin.org/post"
+      method: POST
+      headers:
+        Content-Type: "application/json"
+      body:
+        action: "reserve_inventory"
+        note: "Reserves items in inventory for this order"
+    depends_on:
+      - process_payment
+    retry:
+      max_attempts: 3
+      initial_interval: "2s"
+      max_interval: "20s"
+      multiplier: 2.0
+    timeout: "1m"
+    description: "Reserves inventory items after successful payment. Demonstrates sequential dependency management."
+
+  # Stage 6: Parallel notifications (email + SMS)
+  - id: send_email_notification
+    name: "Send Email Confirmation"
+    type: activity
+    activity_type: http_request
+    config:
+      url: "https://httpbin.org/post"
+      method: POST
+      headers:
+        Content-Type: "application/json"
+      body:
+        action: "send_email"
+        note: "Email will be sent to customer_email parameter"
+    depends_on:
+      - reserve_inventory
+    retry:
+      max_attempts: 3
+      initial_interval: "2s"
+      max_interval: "15s"
+      multiplier: 2.0
+    timeout: "30s"
+    description: "Sends email confirmation. Runs in parallel with SMS notification for efficiency."
+
+  - id: send_sms_notification
+    name: "Send SMS Confirmation"
+    type: activity
+    activity_type: http_request
+    config:
+      url: "https://httpbin.org/post"
+      method: POST
+      headers:
+        Content-Type: "application/json"
+      body:
+        action: "send_sms"
+        note: "SMS will be sent to customer_phone parameter"
+    depends_on:
+      - reserve_inventory
+    retry:
+      max_attempts: 3
+      initial_interval: "2s"
+      max_interval: "15s"
+      multiplier: 2.0
+    timeout: "30s"
+    description: "Sends SMS confirmation. Runs in parallel with email notification, demonstrating parallel task execution."
+
+  # Stage 7: Finalize order
+  - id: complete_order
+    name: "Complete Order Processing"
+    type: activity
+    activity_type: http_request
+    config:
+      url: "https://httpbin.org/post"
+      method: POST
+      headers:
+        Content-Type: "application/json"
+      body:
+        action: "complete_order"
+        note: "Marks order as complete and triggers fulfillment"
+    depends_on:
+      - send_email_notification
+      - send_sms_notification
+    retry:
+      max_attempts: 2
+      initial_interval: "2s"
+      max_interval: "10s"
+      multiplier: 2.0
+    timeout: "30s"
+    description: "Finalizes order processing after all notifications are sent. Demonstrates convergence of parallel tasks."
+

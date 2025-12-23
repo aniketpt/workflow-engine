@@ -1,0 +1,143 @@
+name: data-processing-pipeline
+version: 1.0
+description: "Complex data processing pipeline demonstrating parallel execution, dependencies, retries, and timeouts"
+
+parameters:
+  - name: api_base_url
+    type: string
+    required: false
+    default: "https://httpbin.org"
+    description: "Base URL for API endpoints"
+  - name: notification_endpoint
+    type: string
+    required: false
+    default: "https://httpbin.org/post"
+    description: "Endpoint for sending notifications"
+  - name: enable_validation
+    type: boolean
+    required: false
+    default: true
+    description: "Whether to enable data validation"
+
+tasks:
+  # Stage 1: Parallel Data Collection (3 independent tasks)
+  - id: fetch_user_data
+    name: "Fetch User Data"
+    type: activity
+    activity_type: http_request
+    config:
+      url: "https://httpbin.org/get?type=users"
+      method: GET
+      headers:
+        Accept: "application/json"
+    retry:
+      max_attempts: 3
+      initial_interval: "2s"
+      max_interval: "30s"
+      multiplier: 2.0
+    timeout: "30s"
+
+  - id: fetch_product_catalog
+    name: "Fetch Product Catalog"
+    type: activity
+    activity_type: http_request
+    config:
+      url: "https://httpbin.org/get?type=products"
+      method: GET
+      headers:
+        Accept: "application/json"
+    retry:
+      max_attempts: 5
+      initial_interval: "1s"
+      max_interval: "60s"
+      multiplier: 1.5
+    timeout: "45s"
+
+  - id: fetch_inventory_status
+    name: "Fetch Inventory Status"
+    type: activity
+    activity_type: http_request
+    config:
+      url: "https://httpbin.org/get?type=inventory"
+      method: GET
+      headers:
+        Accept: "application/json"
+    retry:
+      max_attempts: 4
+      initial_interval: "3s"
+      max_interval: "45s"
+      multiplier: 2.0
+    timeout: "40s"
+
+  # Stage 2: Sequential Data Processing (depends on all collection tasks)
+  - id: validate_data
+    name: "Validate Collected Data"
+    type: activity
+    activity_type: http_request
+    config:
+      url: "https://httpbin.org/post"
+      method: POST
+      headers:
+        Content-Type: "application/json"
+      body:
+        action: "validate"
+        sources:
+          - "user_data"
+          - "product_catalog"
+          - "inventory_status"
+    depends_on:
+      - fetch_user_data
+      - fetch_product_catalog
+      - fetch_inventory_status
+    retry:
+      max_attempts: 2
+      initial_interval: "5s"
+      max_interval: "20s"
+      multiplier: 2.0
+    timeout: "60s"
+
+  - id: transform_and_aggregate
+    name: "Transform and Aggregate Data"
+    type: activity
+    activity_type: http_request
+    config:
+      url: "https://httpbin.org/post"
+      method: POST
+      headers:
+        Content-Type: "application/json"
+      body:
+        action: "transform"
+        operations:
+          - "aggregate"
+          - "enrich"
+          - "normalize"
+    depends_on:
+      - validate_data
+    retry:
+      max_attempts: 3
+      initial_interval: "2s"
+      max_interval: "30s"
+      multiplier: 2.0
+    timeout: "90s"
+
+  # Stage 3: Final Notification (depends on processing)
+  - id: send_notification
+    name: "Send Processing Results"
+    type: activity
+    activity_type: http_request
+    config:
+      url: "https://httpbin.org/post"
+      method: POST
+      headers:
+        Content-Type: "application/json"
+      body:
+        status: "completed"
+        message: "Data processing pipeline completed successfully"
+    depends_on:
+      - transform_and_aggregate
+    retry:
+      max_attempts: 5
+      initial_interval: "1s"
+      max_interval: "15s"
+      multiplier: 1.5
+    timeout: "20s"

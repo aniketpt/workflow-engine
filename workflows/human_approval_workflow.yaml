@@ -1,0 +1,116 @@
+name: expense-approval-workflow
+version: 1.0
+description: "Workflow demonstrating human-in-the-loop approval pattern for expense processing"
+
+parameters:
+  - name: employee_id
+    type: string
+    required: true
+    description: "Employee ID submitting the expense"
+  - name: expense_amount
+    type: float
+    required: true
+    description: "Amount of the expense"
+  - name: expense_category
+    type: string
+    required: false
+    default: "general"
+    description: "Category of the expense"
+
+tasks:
+  # Stage 1: Prepare expense submission
+  - id: prepare_expense_data
+    name: "Prepare Expense Data"
+    type: activity
+    activity_type: http_request
+    config:
+      url: "https://httpbin.org/post"
+      method: POST
+      headers:
+        Content-Type: "application/json"
+      body:
+        action: "prepare_expense"
+        note: "Parameters are passed via workflow execution, not interpolated in YAML"
+    retry:
+      max_attempts: 2
+      initial_interval: "2s"
+      max_interval: "10s"
+      multiplier: 2.0
+    timeout: "30s"
+
+  # Stage 2: Human Approval (Human-in-the-Loop)
+  - id: manager_approval
+    name: "Manager Approval Required"
+    type: activity
+    activity_type: human_approval
+    config:
+      approval_id: "expense-approval-{{ execution_id }}"
+      title: "Expense Approval Request"
+      description: "Please review and approve the expense submission for {{ employee_id }}"
+      context:
+        employee_id: "{{ employee_id }}"
+        expense_amount: "{{ expense_amount }}"
+        expense_category: "{{ expense_category }}"
+      poll_interval: 5.0
+      max_wait_time: 3600.0
+    depends_on:
+      - prepare_expense_data
+    retry:
+      max_attempts: 1
+      initial_interval: "1s"
+      max_interval: "5s"
+      multiplier: 1.0
+    timeout: "1h"
+    description: |
+      This task waits for human approval. The workflow will pause here
+      until a manager reviews and approves/rejects the expense request.
+      Use the API endpoint GET /approvals to see pending approvals and
+      POST /approvals/{approval_id}/action to approve or reject.
+
+  # Stage 3: Process approved expense
+  - id: process_payment
+    name: "Process Payment"
+    type: activity
+    activity_type: http_request
+    config:
+      url: "https://httpbin.org/post"
+      method: POST
+      headers:
+        Content-Type: "application/json"
+      body:
+        action: "process_payment"
+        approval_id: "expense-approval-001"
+    depends_on:
+      - manager_approval
+    retry:
+      max_attempts: 3
+      initial_interval: "2s"
+      max_interval: "30s"
+      multiplier: 2.0
+    timeout: "60s"
+    description: "Only executes after manager approval is received"
+
+  # Stage 4: Send confirmation
+  - id: send_confirmation
+    name: "Send Confirmation Email"
+    type: activity
+    activity_type: http_request
+    config:
+      url: "https://httpbin.org/post"
+      method: POST
+      headers:
+        Content-Type: "application/json"
+      body:
+        action: "send_email"
+        recipient: "employee@company.com"
+        subject: "Expense Approved"
+        message: "Your expense has been approved and processed."
+    depends_on:
+      - process_payment
+    retry:
+      max_attempts: 2
+      initial_interval: "1s"
+      max_interval: "10s"
+      multiplier: 2.0
+    timeout: "20s"
+

@@ -1,0 +1,121 @@
+# Sample workflow definitions for testing
+
+simple_workflow:
+  name: simple-workflow
+  version: "1.0"
+  description: "A simple workflow with one task"
+  parameters:
+    - name: message
+      type: string
+      required: true
+  tasks:
+    - id: task1
+      name: "Simple HTTP Request"
+      type: activity
+      activity_type: http_request
+      config:
+        url: "https://httpbin.org/get"
+        method: GET
+
+sequential_workflow:
+  name: sequential-workflow
+  version: "1.0"
+  description: "Sequential task execution"
+  parameters:
+    - name: param1
+      type: string
+      required: true
+  tasks:
+    - id: task1
+      name: "First Task"
+      type: activity
+      activity_type: http_request
+      config:
+        url: "https://httpbin.org/get"
+        method: GET
+    - id: task2
+      name: "Second Task"
+      type: activity
+      activity_type: http_request
+      config:
+        url: "https://httpbin.org/post"
+        method: POST
+      depends_on:
+        - task1
+
+parallel_workflow:
+  name: parallel-workflow
+  version: "1.0"
+  description: "Parallel task execution"
+  parameters: []
+  tasks:
+    - id: task1
+      name: "First Task"
+      type: activity
+      activity_type: http_request
+      config:
+        url: "https://httpbin.org/get"
+        method: GET
+    - id: task2
+      name: "Second Task (Parallel)"
+      type: activity
+      activity_type: http_request
+      config:
+        url: "https://httpbin.org/get"
+        method: GET
+      depends_on:
+        - task1
+    - id: task3
+      name: "Third Task (Parallel)"
+      type: activity
+      activity_type: http_request
+      config:
+        url: "https://httpbin.org/get"
+        method: GET
+      depends_on:
+        - task1
+    - id: task4
+      name: "Final Task"
+      type: activity
+      activity_type: http_request
+      config:
+        url: "https://httpbin.org/post"
+        method: POST
+      depends_on:
+        - task2
+        - task3
+
+retry_workflow:
+  name: retry-workflow
+  version: "1.0"
+  description: "Workflow with retry policy"
+  parameters: []
+  tasks:
+    - id: task1
+      name: "Task with Retry"
+      type: activity
+      activity_type: http_request
+      config:
+        url: "https://httpbin.org/status/500"
+        method: GET
+      retry:
+        max_attempts: 3
+        initial_interval: "1s"
+        max_interval: "10s"
+        multiplier: 2.0
+
+timeout_workflow:
+  name: timeout-workflow
+  version: "1.0"
+  description: "Workflow with timeout"
+  parameters: []
+  tasks:
+    - id: task1
+      name: "Task with Timeout"
+      type: activity
+      activity_type: http_request
+      config:
+        url: "https://httpbin.org/delay/10"
+        method: GET
+      timeout: "5s"
+
