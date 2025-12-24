@@ -60,4 +60,6 @@ See the included workflows:
 - `order_processing_workflow.yaml` - E-commerce order processing with human approvals
 - `human_approval_workflow.yaml` - Expense approval workflow
 - `sample.yaml` - Data processing pipeline example
+- `compensation_demo_workflow.yaml` - Demonstrates compensation/rollback functionality
+
 

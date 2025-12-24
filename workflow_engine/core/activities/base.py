@@ -22,6 +22,7 @@ async def http_request_activity(
             - headers: Request headers
             - body: Request body
             - timeout: Request timeout in seconds (default: 30.0)
+            - simulate_failure: If True (in body or top-level), raises an exception (for testing)
 
     Returns:
         Response data
@@ -31,6 +32,25 @@ async def http_request_activity(
     headers = args.get("headers")
     body = args.get("body")
     timeout = args.get("timeout", 30.0)
+    
+    # Check for simulate_failure flag (can be in body or top-level args)
+    simulate_failure = args.get("simulate_failure", False)
+    if isinstance(body, dict):
+        # Check body for simulate_failure (handles boolean True, string "true"/"True", etc.)
+        body_simulate = body.get("simulate_failure", False)
+        if isinstance(body_simulate, bool):
+            simulate_failure = simulate_failure or body_simulate
+        elif isinstance(body_simulate, str):
+            body_simulate = body_simulate.lower() in ("true", "1", "yes")
+            simulate_failure = simulate_failure or body_simulate
+    
+    # Convert string booleans to actual booleans
+    if isinstance(simulate_failure, str):
+        simulate_failure = simulate_failure.lower() in ("true", "1", "yes")
+    
+    # If simulate_failure is True, raise an exception to trigger compensation
+    if simulate_failure:
+        raise ValueError("Simulated failure: simulate_failure flag was set to true")
     
     if headers is None:
         headers = {}
@@ -239,4 +259,72 @@ async def human_approval_activity(
     raise TimeoutError(
         f"Approval timeout: approval_id '{approval_id}' not approved within {max_wait_time}s"
     )
+
+
+@activity.defn(name="update_execution_status")
+async def update_execution_status_activity(
+    args: Dict[str, Any],
+) -> None:
+    """Update workflow execution status in database.
+    
+    This activity is called at the end of workflow execution (success or failure)
+    to update the WorkflowExecution record in the database with the final status.
+    
+    Args:
+        args: Dictionary containing activity arguments:
+            - execution_id: Workflow execution ID (UUID string, required)
+            - status: Execution status ("COMPLETED", "FAILED", etc.)
+            - result: Optional workflow result (dict)
+            - error: Optional error message (string)
+    """
+    from datetime import datetime
+    from uuid import UUID
+    from workflow_engine.storage.database import get_async_session
+    from workflow_engine.storage.models import WorkflowExecutionStatus
+    from workflow_engine.storage.repositories import SQLAlchemyExecutionRepository
+    
+    execution_id_str = args.get("execution_id")
+    status_str = args.get("status")
+    result = args.get("result")
+    error = args.get("error")
+    
+    if not execution_id_str:
+        raise ValueError("execution_id is required")
+    
+    if not status_str:
+        raise ValueError("status is required")
+    
+    try:
+        execution_id = UUID(execution_id_str)
+    except (ValueError, TypeError):
+        raise ValueError(f"Invalid execution_id format: {execution_id_str}")
+    
+    try:
+        status = WorkflowExecutionStatus(status_str)
+    except ValueError:
+        raise ValueError(f"Invalid status: {status_str}")
+    
+    async for session in get_async_session():
+        execution_repo = SQLAlchemyExecutionRepository(session)
+        
+        # Update execution status
+        updated = await execution_repo.update_status(
+            execution_id=execution_id,
+            status=status,
+            result=result,
+            error=error,
+        )
+        
+        if not updated:
+            raise ValueError(f"Execution not found: {execution_id}")
+        
+        # Also update completed_at timestamp if status is terminal
+        if status in [WorkflowExecutionStatus.COMPLETED, WorkflowExecutionStatus.FAILED, WorkflowExecutionStatus.CANCELLED]:
+            execution = await execution_repo.get_by_id(execution_id)
+            if execution and not execution.completed_at:
+                execution.completed_at = datetime.utcnow()
+                await execution_repo.update(execution)
+        
+        await session.commit()
+        break
 

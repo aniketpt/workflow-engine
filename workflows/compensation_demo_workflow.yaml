@@ -1,0 +1,215 @@
+name: compensation-demo
+version: 1.0
+description: "Demonstrates compensation/rollback functionality - shows how completed tasks are automatically rolled back when a workflow fails"
+
+parameters:
+  - name: order_id
+    type: string
+    required: true
+    description: "Unique order identifier"
+  - name: customer_id
+    type: string
+    required: true
+    description: "Customer identifier"
+  - name: order_amount
+    type: float
+    required: true
+    description: "Total order amount"
+  - name: items
+    type: array
+    required: true
+    description: "List of items to process"
+  - name: simulate_failure
+    type: boolean
+    required: false
+    default: false
+    description: "Set to true to simulate a failure and trigger compensations"
+
+tasks:
+  # Stage 1: Reserve inventory
+  # If workflow fails later, this will be compensated by releasing the inventory
+  - id: reserve_inventory
+    name: "Reserve Inventory"
+    type: activity
+    activity_type: http_request
+    config:
+      url: "https://httpbin.org/post"
+      method: POST
+      headers:
+        Content-Type: "application/json"
+      body:
+        action: "reserve_inventory"
+        order_id: "{{ order_id }}"
+        items: "{{ items }}"
+        note: "Reserves inventory items for this order"
+    compensation:
+      activity_type: http_request
+      config:
+        url: "https://httpbin.org/post"
+        method: POST
+        headers:
+          Content-Type: "application/json"
+        body:
+          action: "release_inventory"
+          order_id: "{{ order_id }}"
+          note: "Releases reserved inventory (compensation for reserve_inventory)"
+      timeout: "30s"
+      retry:
+        max_attempts: 2
+        initial_interval: "1s"
+        max_interval: "10s"
+        multiplier: 2.0
+    retry:
+      max_attempts: 3
+      initial_interval: "2s"
+      max_interval: "30s"
+      multiplier: 2.0
+    timeout: "60s"
+    description: "Reserves inventory items. Compensation releases them if workflow fails."
+
+  # Stage 2: Charge payment
+  # If workflow fails later, this will be compensated by refunding the payment
+  - id: charge_payment
+    name: "Charge Payment"
+    type: activity
+    activity_type: http_request
+    depends_on:
+      - reserve_inventory
+    config:
+      url: "https://httpbin.org/post"
+      method: POST
+      headers:
+        Content-Type: "application/json"
+      body:
+        action: "charge_payment"
+        order_id: "{{ order_id }}"
+        customer_id: "{{ customer_id }}"
+        amount: "{{ order_amount }}"
+        note: "Charges the customer's payment method"
+    compensation:
+      activity_type: http_request
+      config:
+        url: "https://httpbin.org/post"
+        method: POST
+        headers:
+          Content-Type: "application/json"
+        body:
+          action: "refund_payment"
+          order_id: "{{ order_id }}"
+          payment_id: "{{ task_results.charge_payment.payment_id }}"
+          amount: "{{ order_amount }}"
+          note: "Refunds the payment (compensation for charge_payment)"
+      timeout: "45s"
+      retry:
+        max_attempts: 3
+        initial_interval: "2s"
+        max_interval: "20s"
+        multiplier: 2.0
+    retry:
+      max_attempts: 3
+      initial_interval: "2s"
+      max_interval: "30s"
+      multiplier: 2.0
+    timeout: "60s"
+    description: "Charges the customer. Compensation refunds if workflow fails."
+
+  # Stage 3: Create shipping label
+  # If workflow fails later, this will be compensated by canceling the label
+  - id: create_shipping_label
+    name: "Create Shipping Label"
+    type: activity
+    activity_type: http_request
+    depends_on:
+      - charge_payment
+    config:
+      url: "https://httpbin.org/post"
+      method: POST
+      headers:
+        Content-Type: "application/json"
+      body:
+        action: "create_shipping_label"
+        order_id: "{{ order_id }}"
+        items: "{{ items }}"
+        note: "Creates shipping label for the order"
+    compensation:
+      activity_type: http_request
+      config:
+        url: "https://httpbin.org/post"
+        method: POST
+        headers:
+          Content-Type: "application/json"
+        body:
+          action: "cancel_shipping_label"
+          order_id: "{{ order_id }}"
+          label_id: "{{ task_results.create_shipping_label.label_id }}"
+          note: "Cancels the shipping label (compensation for create_shipping_label)"
+      timeout: "30s"
+      retry:
+        max_attempts: 2
+        initial_interval: "1s"
+        max_interval: "10s"
+        multiplier: 2.0
+    retry:
+      max_attempts: 3
+      initial_interval: "2s"
+      max_interval: "30s"
+      multiplier: 2.0
+    timeout: "60s"
+    description: "Creates shipping label. Compensation cancels it if workflow fails."
+
+  # Stage 4: Send notification
+  # This task has NO compensation - it's idempotent and safe to skip rollback
+  # If workflow fails here, only the previous 3 tasks will be compensated
+  - id: send_notification
+    name: "Send Order Confirmation"
+    type: activity
+    activity_type: http_request
+    depends_on:
+      - create_shipping_label
+    config:
+      url: "https://httpbin.org/post"
+      method: POST
+      headers:
+        Content-Type: "application/json"
+      body:
+        action: "send_notification"
+        order_id: "{{ order_id }}"
+        customer_id: "{{ customer_id }}"
+        note: "Sends order confirmation email to customer"
+    retry:
+      max_attempts: 3
+      initial_interval: "2s"
+      max_interval: "30s"
+      multiplier: 2.0
+    timeout: "30s"
+    description: "Sends notification. No compensation needed (idempotent operation)."
+
+  # Stage 5: Finalize order (this will fail if simulate_failure is true)
+  # When this fails, compensations will run in reverse order:
+  # 1. create_shipping_label compensation (cancel label)
+  # 2. charge_payment compensation (refund)
+  # 3. reserve_inventory compensation (release inventory)
+  - id: finalize_order
+    name: "Finalize Order"
+    type: activity
+    activity_type: http_request
+    depends_on:
+      - send_notification
+    config:
+      url: "https://httpbin.org/post"
+      method: POST
+      headers:
+        Content-Type: "application/json"
+      body:
+        action: "finalize_order"
+        order_id: "{{ order_id }}"
+        simulate_failure: "{{ simulate_failure }}"
+        note: "Finalizes the order. Set simulate_failure=true to trigger compensations"
+    retry:
+      max_attempts: 2
+      initial_interval: "1s"
+      max_interval: "10s"
+      multiplier: 2.0
+    timeout: "30s"
+    description: "Finalizes the order. If this fails, all previous compensations will run in reverse order."
+

@@ -63,7 +63,6 @@ async def register_workflow_from_file(
         
         # Check if workflow already exists
         existing = await workflow_service.workflow_repo.get_by_name(workflow_def.name)
-        
         if existing:
             # Update existing workflow
             try:
@@ -158,7 +157,6 @@ async def register_all_workflows() -> dict:
         # Register each workflow
         for yaml_file in workflow_files:
             success, message = await register_workflow_from_file(yaml_file, workflow_service)
-            
             detail = {
                 "file": yaml_file.name,
                 "success": success,
@@ -176,6 +174,14 @@ async def register_all_workflows() -> dict:
             else:
                 results["failed"] += 1
         
+        # Explicitly commit the session to ensure all changes are persisted
+        # This is necessary because using 'break' with async for may exit before
+        # the context manager's commit runs
+        try:
+            await session.commit()
+        except Exception as e:
+            await session.rollback()
+            raise
         # Session will auto-commit on successful completion (via get_async_session context manager)
         break
     

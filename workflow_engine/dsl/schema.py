@@ -50,6 +50,29 @@ class RetryPolicy(BaseModel):
         return v
 
 
+class Compensation(BaseModel):
+    """Compensation activity definition for task rollback."""
+
+    activity_type: str  # e.g., "http_request", "python_function"
+    config: Dict[str, Any] = Field(default_factory=dict)
+    timeout: Optional[str] = None  # e.g., "5m", "1h"
+    retry: Optional[RetryPolicy] = None
+
+    @field_validator("timeout")
+    @classmethod
+    def validate_timeout(cls, v: Optional[str]) -> Optional[str]:
+        """Validate timeout format."""
+        if v is None:
+            return v
+        if not v[-1] in ["s", "m", "h"]:
+            raise ValueError("Timeout must end with s (seconds), m (minutes), or h (hours)")
+        try:
+            float(v[:-1])
+        except ValueError:
+            raise ValueError(f"Invalid timeout format: {v}")
+        return v
+
+
 class Task(BaseModel):
     """Workflow task definition."""
 
@@ -61,6 +84,7 @@ class Task(BaseModel):
     depends_on: Optional[List[str]] = Field(default=None)
     retry: Optional[RetryPolicy] = None
     timeout: Optional[str] = None  # e.g., "5m", "1h"
+    compensation: Optional[Compensation] = None  # Optional compensation activity
 
     @field_validator("timeout")
     @classmethod
